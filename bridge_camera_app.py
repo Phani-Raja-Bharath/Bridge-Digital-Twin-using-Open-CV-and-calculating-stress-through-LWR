@@ -27,7 +27,7 @@ try:
     import plotly.express as px
     from plotly.subplots import make_subplots
     PLOTLY_AVAILABLE = True
-except Exception:
+except ImportError:
     PLOTLY_AVAILABLE = False
 
 try:
@@ -44,215 +44,49 @@ try:
 except ImportError:
     SKLEARN_AVAILABLE = False
 
-# Constants
-TWIN_BRIDGES_SPECS = {
-    'name': 'Twin Bridges - I-87 Northway',
-    'main_span_ft': 599.8,
-    'total_length_ft': 778.9,
-    'main_span_m': 182.8,
-    'total_length_m': 237.4,
-    'age_years': 66,
-    'material': 'Steel through arch',
-}
+# Import configuration and services
+from config import Config
+from src.services.camera_service import get_camera_service, capture_frame_ffmpeg, preprocess_frame
+from src.models.vehicle_detection import detect_vehicles_with_overlay, get_yolo_model
+from src.utils.logging_config import setup_logging, get_logger, LogContext, log_performance
 
-TWIN_BRIDGES_CAMERAS = {
-    "5821 - North of Mohawk (Twin Bridges)": {
-        "url": "https://s51.nysdot.skyvdn.com:443/rtplive/R1_003/playlist.m3u8",
-        "approaching_bridge": "right",
-        "camera_location": "North of bridge looking south",
-        "left_lane_label": "Southbound (PAST LOAD)",
-        "right_lane_label": "Northbound (CURRENT LOAD)"
-    },
-    "3645 - South of Mohawk (Twin Bridges)": {
-        "url": "https://s51.nysdot.skyvdn.com:443/rtplive/R1_001/playlist.m3u8",
-        "approaching_bridge": "left",
-        "camera_location": "South of bridge looking north",
-        "left_lane_label": "Northbound (CURRENT LOAD)",
-        "right_lane_label": "Southbound (PAST LOAD)"
-    },
-}
+# Setup logging
+app_logger = setup_logging("bridge_v3")
+app_logger.info("Bridge V3 application starting up")
 
-VEHICLE_WEIGHTS = {'car': 4000, 'truck': 35000, 'bus': 25000, 'motorcycle': 500}
-VEHICLE_CLASSES = {2: 'car', 3: 'motorcycle', 5: 'bus', 7: 'truck'}
+# Configuration validation on startup
+if not Config.validate_config():
+    app_logger.error("Configuration validation failed")
+    st.error("Configuration validation failed. Please check environment variables.")
+    st.stop()
 
-
-#############################################
-# CAMERA & DETECTION FUNCTIONS
-#############################################
-
-def capture_frame_ffmpeg(stream_url, timeout=10):
-    """Capture single frame from HLS stream"""
-    try:
-        cmd = ['ffmpeg', '-loglevel', 'error', '-i', stream_url, '-vframes', '1',
-               '-f', 'image2pipe', '-vcodec', 'png', '-']
-        result = subprocess.run(cmd, capture_output=True, timeout=timeout)
-        if result.returncode == 0:
-            image = Image.open(io.BytesIO(result.stdout))
-            frame = np.array(image)
-            if len(frame.shape) == 3:
-                frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
-            return frame
-        return None
-    except:
-        return None
-
-
-def preprocess_frame(frame, enhance=True):
-    """Enhance image for better detection"""
-    if not enhance or frame is None:
-        return frame
-    
-    try:
-        lab = cv2.cvtColor(frame, cv2.COLOR_BGR2LAB)
-        l, a, b = cv2.split(lab)
-        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-        l = clahe.apply(l)
-        enhanced = cv2.merge([l, a, b])
-        enhanced = cv2.cvtColor(enhanced, cv2.COLOR_LAB2BGR)
-        return enhanced
-    except:
-        return frame
-
-
-def define_lane_regions(frame, lane_divider_percent=0.43):
-    """Define lane regions with divider"""
-    height, width = frame.shape[:2]
-    divider_x = int(width * lane_divider_percent)
-    
-    regions = {
-        'left_lane': {'x1': 0, 'y1': 0, 'x2': divider_x, 'y2': height},
-        'right_lane': {'x1': divider_x, 'y1': 0, 'x2': width, 'y2': height}
-    }
-    
-    return regions, divider_x
-
-
-def detect_vehicles_with_overlay(frame, model, regions, camera_config, confidence=0.15, enhance=True):
-    """
-    Detect vehicles and create visual overlay (like earlier simple dashboard)
-    Returns: vehicle_data dict and annotated frame
-    """
-    if frame is None or model is None:
-        return {}, frame
-    
-    try:
-        processed = preprocess_frame(frame, enhance)
-        output_frame = frame.copy()
-        height, width = frame.shape[:2]
-        
-        approaching_side = camera_config['approaching_bridge']
-        
-        vehicle_data = {
-            'approaching_bridge': {'car': 0, 'truck': 0, 'bus': 0, 'motorcycle': 0, 'total': 0},
-            'leaving_bridge': {'car': 0, 'truck': 0, 'bus': 0, 'motorcycle': 0, 'total': 0},
-        }
-        
-        results = model(processed, conf=confidence, iou=0.45, imgsz=640, 
-                       verbose=False, classes=[2, 3, 5, 7])
-        
-        divider_x = regions['right_lane']['x1']
-        
-        # Draw lane divider
-        cv2.line(output_frame, (divider_x, 0), (divider_x, height), (0, 255, 255), 4)
-        
-        # Lane labels
-        left_label = camera_config['left_lane_label']
-        right_label = camera_config['right_lane_label']
-        
-        cv2.rectangle(output_frame, (5, 5), (450, 65), (0, 0, 0), -1)
-        cv2.putText(output_frame, left_label, (10, 30),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (150, 150, 150), 2)
-        cv2.putText(output_frame, "Twin Bridges I-87 (1959)", (10, 55),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (100, 100, 255), 1)
-        
-        cv2.rectangle(output_frame, (divider_x + 5, 5), (divider_x + 450, 65), (0, 0, 0), -1)
-        cv2.putText(output_frame, right_label, (divider_x + 10, 30),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
-        cv2.putText(output_frame, "Steel Arch - 66yrs", (divider_x + 10, 55),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (100, 100, 255), 1)
-        
-        # Detect and draw boxes
-        for result in results:
-            boxes = result.boxes
-            
-            for box in boxes:
-                class_id = int(box.cls[0])
-                
-                if class_id in VEHICLE_CLASSES:
-                    vehicle_type = VEHICLE_CLASSES[class_id]
-                    
-                    x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
-                    x1, y1, x2, y2 = int(x1), int(y1), int(x2), int(y2)
-                    center_x = (x1 + x2) // 2
-                    
-                    # Determine lane
-                    if center_x < divider_x:
-                        category = 'approaching_bridge' if approaching_side == 'left' else 'leaving_bridge'
-                        box_color = (0, 255, 0) if category == 'approaching_bridge' else (150, 150, 150)
-                        label_prefix = "LOAD" if category == 'approaching_bridge' else "PAST"
-                    else:
-                        category = 'approaching_bridge' if approaching_side == 'right' else 'leaving_bridge'
-                        box_color = (0, 255, 0) if category == 'approaching_bridge' else (150, 150, 150)
-                        label_prefix = "LOAD" if category == 'approaching_bridge' else "PAST"
-                    
-                    vehicle_data[category][vehicle_type] += 1
-                    vehicle_data[category]['total'] += 1
-                    
-                    # Draw box
-                    thickness = 3 if category == 'approaching_bridge' else 1
-                    cv2.rectangle(output_frame, (x1, y1), (x2, y2), box_color, thickness)
-                    
-                    label = f"{label_prefix}-{vehicle_type.upper()[:3]}"
-                    cv2.putText(output_frame, label, (x1, y1 - 10),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, box_color, 2)
-        
-        # Bottom summary
-        approaching_count = vehicle_data['approaching_bridge']['total']
-        leaving_count = vehicle_data['leaving_bridge']['total']
-        
-        summary_height = 100
-        cv2.rectangle(output_frame, (0, height - summary_height), (width, height), (0, 0, 0), -1)
-        
-        # Calculate load
-        load_lbs = sum(vehicle_data['approaching_bridge'][v] * VEHICLE_WEIGHTS.get(v, 4000) 
-                      for v in ['car', 'truck', 'bus', 'motorcycle'])
-        load_tons = load_lbs / 2000
-        
-        cv2.putText(output_frame,
-                    f"CURRENT BRIDGE LOAD: {approaching_count} vehicles, {load_tons:.1f} tons "
-                    f"(C:{vehicle_data['approaching_bridge']['car']}, "
-                    f"T:{vehicle_data['approaching_bridge']['truck']}, "
-                    f"B:{vehicle_data['approaching_bridge']['bus']})",
-                    (10, height - 65), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-        
-        cv2.putText(output_frame,
-                    f"Bridge: Steel Arch, Span: 599.8ft, Age: 66yrs",
-                    (10, height - 35), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (100, 200, 255), 2)
-        
-        cv2.putText(output_frame,
-                    f"Past load (leaving): {leaving_count} vehicles (not counted)",
-                    (10, height - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (150, 150, 150), 1)
-        
-        # Add load to return data
-        vehicle_data['load_tons'] = load_tons
-        vehicle_data['load_lbs'] = load_lbs
-        vehicle_data['density'] = approaching_count * 5 / TWIN_BRIDGES_SPECS['total_length_m']
-        vehicle_data['timestamp'] = datetime.now()
-        
-        return vehicle_data, output_frame
-        
-    except Exception as e:
-        print(f"Error: {e}")
-        return {}, frame
+app_logger.info("Configuration validation passed")
 
 
 def save_snapshot(frame, snapshot_dir, camera_name):
     """Save snapshot with timestamp"""
-    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-    filename = f"{camera_name}_{timestamp}.jpg"
-    filepath = os.path.join(snapshot_dir, filename)
-    cv2.imwrite(filepath, frame)
-    return filepath
+    logger = get_logger(__name__)
+    
+    try:
+        with LogContext(logger, "save_snapshot", camera=camera_name):
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            filename = f"{camera_name}_{timestamp}.jpg"
+            filepath = os.path.join(snapshot_dir, filename)
+            
+            # Ensure directory exists
+            os.makedirs(snapshot_dir, exist_ok=True)
+            
+            # Save image
+            success = cv2.imwrite(filepath, frame)
+            if not success:
+                raise IOError(f"Failed to save image to {filepath}")
+            
+            logger.info(f"Snapshot saved: {filepath}")
+            return filepath
+            
+    except Exception as e:
+        logger.error(f"Failed to save snapshot for camera {camera_name}: {e}")
+        raise
 
 
 #############################################
@@ -394,7 +228,7 @@ def predict_fatigue_from_live_data(model, live_traffic, avg_shockwave=0):
     if model is None:
         return None
     
-    estimated_density = live_traffic.get('density', live_traffic.get('total', 5) * 5 / TWIN_BRIDGES_SPECS['total_length_m'])
+    estimated_density = live_traffic.get('density', live_traffic.get('total', 5) * 5 / Config.BRIDGE_SPECS['total_length_m'])
     
     features = {
         'initial_density': estimated_density,
@@ -523,10 +357,10 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 {'='*60}
 BRIDGE SPECIFICATIONS
 {'='*60}
-Name: {TWIN_BRIDGES_SPECS['name']}
-Design: {TWIN_BRIDGES_SPECS['material']}
-Main Span: {TWIN_BRIDGES_SPECS['main_span_ft']} ft
-Age: {TWIN_BRIDGES_SPECS['age_years']} years
+Name: {Config.BRIDGE_SPECS['name']}
+Design: {Config.BRIDGE_SPECS['material']}
+Main Span: {Config.BRIDGE_SPECS['main_span_ft']} ft
+Age: {Config.BRIDGE_SPECS['age_years']} years
 
 {'='*60}
 LIVE TRAFFIC OBSERVATION
@@ -579,7 +413,8 @@ def generate_html_report(live_data, mc_data, metrics, prediction, fig1=None, fig
     def fmt(v, fmt_str="{:.2f}"):
         try:
             return fmt_str.format(v)
-        except Exception:
+        except (ValueError, TypeError, KeyError) as e:
+            # Handle formatting errors gracefully
             return str(v)
 
     # Basic styles
@@ -651,8 +486,12 @@ def generate_html_report(live_data, mc_data, metrics, prediction, fig1=None, fig
             figs_html += fig1.to_html(full_html=False, include_plotlyjs=True)
         if fig2 is not None:
             figs_html += fig2.to_html(full_html=False, include_plotlyjs=False)
-    except Exception:
-        pass
+    except (AttributeError, ValueError) as e:
+        # Handle Plotly figure conversion errors
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.warning(f"Failed to convert Plotly figures to HTML: {e}")
+        figs_html = "<p>Visualization unavailable - figure conversion failed</p>"
 
     html = f"""
     <!doctype html>
@@ -728,10 +567,19 @@ def main():
         # Camera selection
         selected_camera_name = st.sidebar.selectbox(
             "Select Camera",
-            list(TWIN_BRIDGES_CAMERAS.keys())
+            [config['name'] for config in Config.CAMERA_CONFIGS.values()]
         )
         
-        camera_config = TWIN_BRIDGES_CAMERAS[selected_camera_name]
+        # Find camera config by name
+        camera_config = None
+        for config in Config.CAMERA_CONFIGS.values():
+            if config['name'] == selected_camera_name:
+                camera_config = config
+                break
+        
+        if camera_config is None:
+            st.error("Camera configuration not found")
+            return
         
         st.sidebar.subheader("📸 Monitoring Settings")
         snapshot_interval = st.sidebar.number_input("Auto-capture interval (sec)", 5, 300, 30, 5)
@@ -939,8 +787,7 @@ def main():
             live_data = None
             
             if use_live:
-                selected_camera = list(TWIN_BRIDGES_CAMERAS.keys())[0]
-                camera_config = TWIN_BRIDGES_CAMERAS[selected_camera]
+                camera_config = list(Config.CAMERA_CONFIGS.values())[0]
                 stream_url = camera_config['url']
                 frame = capture_frame_ffmpeg(stream_url)
                 
@@ -963,7 +810,7 @@ def main():
             status.text(f"Step 2/5: Running {num_runs} Monte Carlo simulations...")
             
             live_density = live_data['density'] if live_data else None
-            mc_data = run_monte_carlo_simulation(num_runs, TWIN_BRIDGES_SPECS['total_length_m'], live_density)
+            mc_data = run_monte_carlo_simulation(num_runs, Config.BRIDGE_SPECS['total_length_m'], live_density)
             st.session_state.monte_carlo_data = mc_data
             
             st.success(f"✅ MC complete. Mean fatigue: {mc_data['final_fatigue'].mean():.2f}")
