@@ -515,6 +515,7 @@ def run_lwr_simulation(
     v_max_mps: float,
     total_time: int = 300,
     inject_jam: bool = False  # Now probabilistic, passed from caller
+
 ) -> Dict:
     """LWR traffic flow simulation"""
     
@@ -564,7 +565,32 @@ def run_lwr_simulation(
         "avg_density": np.mean(rho),
         "max_stress": max(stress_history),
         "stress_history": stress_history 
+        
     }
+
+def plot_reliability_over_time(session_log: list) -> go.Figure:
+    """Line chart of reliability index β over time"""
+    times = [entry["timestamp"].strftime("%H:%M:%S") for entry in session_log]
+    betas = [entry.get("reliability_index", 0.0) for entry in session_log]
+
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=times,
+        y=betas,
+        mode="lines+markers",
+        line=dict(color="#3498db", width=3),
+        name="Reliability Index β"
+    ))
+
+    fig.add_hline(y=3.0, line_dash="dash", line_color="green", annotation_text="Target β=3.0")
+    fig.update_layout(
+        title="Reliability Index Over Time",
+        xaxis_title="Capture Time",
+        yaxis_title="β",
+        template="plotly_white",
+        height=350
+    )
+    return fig
 
 
 def run_monte_carlo(
@@ -1092,6 +1118,8 @@ def generate_session_report(
     avg_vehicles = total_vehicles / len(session_log)
     avg_load = sum(entry["vehicle_data"]["load_tons"] for entry in session_log) / len(session_log)
     max_load = max(entry["vehicle_data"]["load_tons"] for entry in session_log)
+    avg_beta = sum(e.get("reliability_index", 0.0) for e in session_log) / len(session_log)
+
     
     start_time = session_log[0]["timestamp"]
     end_time = session_log[-1]["timestamp"]
@@ -1169,6 +1197,10 @@ def generate_session_report(
             <div class="stat-card">
                 <div class="value">{max_load:.1f}</div>
                 <div class="label">Max Load (tons)</div>
+            </div>
+            <div class="stat-card">
+                <div class="value">{avg_beta:.2f}</div>
+                <div class="label">Avg Reliability β</div>
             </div>
         </div>
         
@@ -1371,8 +1403,8 @@ def generate_nysdot_comparison_report(
         </div>
         
         <div class="summary-box">
-            <h3>📋 For Your Paper</h3>
-            <p>Once you've entered the NYSDOT data, you can use this statement:</p>
+            <h3>📋 For Accuracy Comparison Report</h3>
+            <p>Enter the NYSDOT data, and the system will generate a report:</p>
             <blockquote id="paper-quote" style="font-style: italic; background: white; padding: 15px; border-left: 4px solid #3498db;">
                 "Vehicle detection accuracy was validated against NYSDOT continuous count station data for I-87. 
                 Over a [DURATION]-hour monitoring period on [DATE], the system detected [DETECTED] vehicles 
@@ -1759,6 +1791,28 @@ def main():
             for entry in st.session_state.session_log
         ])
         st.dataframe(log_df, use_container_width=True, hide_index=True)
+
+        # Export fatigue + beta log
+        df_log = pd.DataFrame([
+            {
+                "timestamp": entry["timestamp"].strftime("%Y-%m-%d %H:%M:%S"),
+                "vehicles": entry["vehicle_data"]["approaching"]["total"],
+                "load_tons": entry["vehicle_data"]["load_tons"],
+                "fatigue_damage": entry.get("damage", 0.0),
+                "reliability_index": entry.get("reliability_index", 0.0)
+            }
+            for entry in st.session_state.session_log
+        ])
+        csv_log = df_log.to_csv(index=False)
+
+        st.download_button(
+            "📁 Download Fatigue + β Log (CSV)",
+            csv_log,
+            f"fatigue_beta_log_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+            "text/csv",
+            use_container_width=True
+        )
+
         
         # Download session report
         if not st.session_state.monitoring_active:
@@ -1774,6 +1828,35 @@ def main():
                 "text/html",
                 use_container_width=True
             )
+        
+            # Generate hourly summary
+        df_log["hour"] = pd.to_datetime(df_log["timestamp"]).dt.strftime("%Y-%m-%d %H:00")
+
+        hourly_summary = df_log.groupby("hour").agg({
+            "vehicles": "sum",
+            "load_tons": "mean",
+            "fatigue_damage": "mean",
+            "reliability_index": "mean"
+        }).reset_index()
+
+        hourly_summary.rename(columns={
+            "hour": "Hour",
+            "vehicles": "Total Vehicles",
+            "load_tons": "Avg Load (tons)",
+            "fatigue_damage": "Avg Fatigue Damage",
+            "reliability_index": "Avg Reliability Index (β)"
+        }, inplace=True)
+
+        csv_hourly = hourly_summary.to_csv(index=False)
+
+        st.download_button(
+            "📊 Download Hourly Summary (CSV)",
+            csv_hourly,
+            f"hourly_summary_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+            "text/csv",
+            use_container_width=True
+        )
+
     
     # =========================================================================
     # ANALYZE BUTTON
@@ -1920,12 +2003,13 @@ def main():
         st.markdown("---")
         st.subheader("📈 Analysis Charts")
         
-        tab1, tab2, tab3, tab4, tab5 = st.tabs([
+        tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
             "Fatigue Breakdown", 
             "Sensitivity", 
             "Environmental Factors",
             "📅 Historical Weather",
-            "📊 NYSDOT Validation"
+            "📊 NYSDOT Validation",
+            "📉 Reliability Index"
         ])
         
         with tab1:
@@ -2013,7 +2097,7 @@ def main():
                 st.markdown("""
                 1. Download the comparison template above
                 2. Open [NYSDOT Traffic Data Viewer](https://gisportalny.dot.ny.gov/portalny/apps/webappviewer/index.html?id=28537cbc8b5941e19cf8e959b16797b4)
-                3. Find I-87 near Twin Bridges (Cohoes, NY)
+                3. Find I-87 near Twin Bridges (Cohoes, NY) Station 153000
                 4. Click on Continuous Count station
                 5. Download hourly data for your session date
                 6. Enter NYSDOT counts in the template
@@ -2034,6 +2118,12 @@ def main():
                     st.metric("Rate", f"{total_detected/max(duration_hrs, 0.1):.0f} veh/hr")
             else:
                 st.warning("⚠️ No session data yet. Start a monitoring session first to generate comparison data.")
+
+        with tab6:
+            st.subheader("📉 Reliability Index Over Time")
+            fig_beta = plot_reliability_over_time(st.session_state.session_log)
+            st.plotly_chart(fig_beta, use_container_width=True)
+
         
         # =====================================================================
         # DOWNLOADS
@@ -2071,6 +2161,12 @@ def main():
                 )
         
         with col_d3:
+            # Calculate avg_beta for summary
+            if st.session_state.session_log:
+                avg_beta = sum(e.get("reliability_index", 0.0) for e in st.session_state.session_log) / len(st.session_state.session_log)
+            else:
+                avg_beta = 0.0
+
             # Summary text
             summary = f"""
 HYBRID DIGITAL TWIN - BRIDGE FATIGUE ASSESSMENT
@@ -2090,6 +2186,8 @@ FATIGUE ASSESSMENT:
 - Environmental stress: {scenario['environmental_stress']}/100
 - Combined fatigue: {scenario['combined_fatigue']}/100
 - Status: {status_text}
+- Avg Reliability Index β: {avg_beta:.2f}
+
 
 LIMITATIONS:
 This is a proof-of-concept. Fatigue scores are proxy metrics,
