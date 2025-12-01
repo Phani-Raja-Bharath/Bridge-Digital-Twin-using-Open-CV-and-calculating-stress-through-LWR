@@ -2,12 +2,6 @@
 COMPLETE HYBRID DIGITAL TWIN - FINAL VERSION
 With integrated live screenshot monitoring + full analysis pipeline
 
-Features:
-- Live screenshot monitoring with auto-capture
-- Visual traffic detection overlay
-- Complete LWR + Monte Carlo + ML pipeline
-- Publication-ready visualizations
-- Comprehensive reporting & export
 """
 
 import streamlit as st
