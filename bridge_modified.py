@@ -408,11 +408,15 @@ def detect_vehicles(
     camera_config: Dict,
     lane_divider: float = 0.43,
     confidence: float = 0.15,
-    bridge_config: BridgeConfig = None
+    bridge_config: BridgeConfig = None,
+    vehicle_weights: Dict = None
 ) -> Tuple[Dict, np.ndarray]:
      
     if frame is None or model is None:
         return {}, frame
+    
+    # Use passed weights or default
+    weights = vehicle_weights if vehicle_weights else VEHICLE_WEIGHTS
     
     try:
         output_frame = frame.copy()
@@ -477,7 +481,7 @@ def detect_vehicles(
         
         # Calculate load
         load_lbs = sum(
-            vehicle_data["approaching"][v] * VEHICLE_WEIGHTS.get(v, 4000)
+            vehicle_data["approaching"][v] * weights.get(v, 4000)
             for v in ["car", "truck", "bus", "motorcycle"]
         )
         load_tons = load_lbs / 2000
@@ -944,6 +948,44 @@ def create_seasonal_fatigue_chart(seasonal_data: pd.DataFrame) -> go.Figure:
 # REPORT GENERATION
 # =============================================================================
 
+def get_report_css() -> str:
+    """Return common CSS for HTML reports"""
+    return """
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; margin: 40px; line-height: 1.6; color: #333; }
+        h1 { color: #2c3e50; margin: 0; }
+        h2 { color: #34495e; margin-top: 30px; border-bottom: 2px solid #3498db; padding-bottom: 10px; }
+        .header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 30px; border-radius: 10px; margin-bottom: 30px; }
+        .header p { margin: 5px 0; opacity: 0.9; }
+        .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px; margin: 20px 0; }
+        .card { background: #f8f9fa; border-radius: 8px; padding: 20px; border-left: 4px solid #3498db; }
+        .card.warning { border-left-color: #f39c12; }
+        .card.danger { border-left-color: #e74c3c; }
+        .card.success { border-left-color: #27ae60; }
+        .card h3 { margin: 0 0 10px 0; color: #7f8c8d; font-size: 0.9em; text-transform: uppercase; }
+        .card .value { font-size: 2em; font-weight: bold; color: #2c3e50; }
+        .score-box { background: linear-gradient(135deg, #74b9ff, #0984e3); color: white; padding: 30px; border-radius: 10px; text-align: center; margin: 30px 0; }
+        .score-box .score { font-size: 4em; font-weight: bold; }
+        .score-box .status { font-size: 1.5em; margin-top: 10px; }
+        table { width: 100%; border-collapse: collapse; margin: 20px 0; }
+        th, td { padding: 12px; text-align: left; border-bottom: 1px solid #ddd; }
+        th { background: #f8f9fa; }
+        .limitations { background: #fff3cd; border: 1px solid #ffc107; border-radius: 8px; padding: 20px; margin-top: 30px; }
+        .limitations h3 { color: #856404; margin-top: 0; }
+        .footer { margin-top: 40px; padding-top: 20px; border-top: 1px solid #ddd; color: #7f8c8d; font-size: 0.9em; text-align: center; }
+        .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 15px; margin: 20px 0; }
+        .stat-card { background: #f8f9fa; border-radius: 8px; padding: 20px; text-align: center; }
+        .stat-card .value { font-size: 2em; font-weight: bold; color: #2c3e50; }
+        .stat-card .label { color: #7f8c8d; font-size: 0.9em; }
+        .captures-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; margin: 20px 0; }
+        .capture-card { background: white; border: 1px solid #ddd; border-radius: 8px; overflow: hidden; }
+        .capture-header { background: #34495e; color: white; padding: 10px 15px; display: flex; justify-content: space-between; }
+        .capture-num { font-weight: bold; }
+        .capture-card img { width: 100%; height: auto; }
+        .capture-stats { padding: 15px; display: flex; justify-content: space-around; background: #f8f9fa; }
+        .weather-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 15px; margin: 20px 0; }
+        .weather-card { background: #e3f2fd; border-radius: 8px; padding: 15px; text-align: center; }
+    """
+
 def generate_html_report(
     bridge_config: BridgeConfig,
     vehicle_data: Dict,
@@ -961,28 +1003,7 @@ def generate_html_report(
     <head>
         <title>Bridge Fatigue Assessment Report</title>
         <style>
-            body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; margin: 40px; line-height: 1.6; }}
-            h1 {{ color: #2c3e50; border-bottom: 3px solid #3498db; padding-bottom: 10px; }}
-            h2 {{ color: #34495e; margin-top: 30px; }}
-            .header {{ background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 30px; border-radius: 10px; margin-bottom: 30px; }}
-            .header h1 {{ color: white; border: none; margin: 0; }}
-            .header p {{ margin: 5px 0; opacity: 0.9; }}
-            .grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px; margin: 20px 0; }}
-            .card {{ background: #f8f9fa; border-radius: 8px; padding: 20px; border-left: 4px solid #3498db; }}
-            .card.warning {{ border-left-color: #f39c12; }}
-            .card.danger {{ border-left-color: #e74c3c; }}
-            .card.success {{ border-left-color: #27ae60; }}
-            .card h3 {{ margin: 0 0 10px 0; color: #7f8c8d; font-size: 0.9em; text-transform: uppercase; }}
-            .card .value {{ font-size: 2em; font-weight: bold; color: #2c3e50; }}
-            .score-box {{ background: linear-gradient(135deg, #74b9ff, #0984e3); color: white; padding: 30px; border-radius: 10px; text-align: center; margin: 30px 0; }}
-            .score-box .score {{ font-size: 4em; font-weight: bold; }}
-            .score-box .status {{ font-size: 1.5em; margin-top: 10px; }}
-            table {{ width: 100%; border-collapse: collapse; margin: 20px 0; }}
-            th, td {{ padding: 12px; text-align: left; border-bottom: 1px solid #ddd; }}
-            th {{ background: #f8f9fa; }}
-            .limitations {{ background: #fff3cd; border: 1px solid #ffc107; border-radius: 8px; padding: 20px; margin-top: 30px; }}
-            .limitations h3 {{ color: #856404; margin-top: 0; }}
-            .footer {{ margin-top: 40px; padding-top: 20px; border-top: 1px solid #ddd; color: #7f8c8d; font-size: 0.9em; }}
+            {get_report_css()}
         </style>
     </head>
     <body>
@@ -1150,26 +1171,7 @@ def generate_session_report(
     <head>
         <title>Bridge Monitoring Session Report</title>
         <style>
-            body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; margin: 40px; line-height: 1.6; }}
-            .header {{ background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 30px; border-radius: 10px; margin-bottom: 30px; }}
-            .header h1 {{ margin: 0; }}
-            .header p {{ margin: 5px 0; opacity: 0.9; }}
-            h2 {{ color: #34495e; margin-top: 30px; border-bottom: 2px solid #3498db; padding-bottom: 10px; }}
-            .stats-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 15px; margin: 20px 0; }}
-            .stat-card {{ background: #f8f9fa; border-radius: 8px; padding: 20px; text-align: center; }}
-            .stat-card .value {{ font-size: 2em; font-weight: bold; color: #2c3e50; }}
-            .stat-card .label {{ color: #7f8c8d; font-size: 0.9em; }}
-            .captures-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; margin: 20px 0; }}
-            .capture-card {{ background: white; border: 1px solid #ddd; border-radius: 8px; overflow: hidden; }}
-            .capture-header {{ background: #34495e; color: white; padding: 10px 15px; display: flex; justify-content: space-between; }}
-            .capture-num {{ font-weight: bold; }}
-            .capture-card img {{ width: 100%; height: auto; }}
-            .capture-stats {{ padding: 15px; display: flex; justify-content: space-around; background: #f8f9fa; }}
-            .weather-grid {{ display: grid; grid-template-columns: repeat(4, 1fr); gap: 15px; margin: 20px 0; }}
-            .weather-card {{ background: #e3f2fd; border-radius: 8px; padding: 15px; text-align: center; }}
-            .limitations {{ background: #fff3cd; border: 1px solid #ffc107; border-radius: 8px; padding: 20px; margin-top: 30px; }}
-            .limitations h3 {{ color: #856404; margin-top: 0; }}
-            .footer {{ margin-top: 40px; padding-top: 20px; border-top: 1px solid #ddd; color: #7f8c8d; font-size: 0.9em; text-align: center; }}
+            {get_report_css()}
         </style>
     </head>
     <body>
@@ -1303,18 +1305,9 @@ def generate_nysdot_comparison_report(
     <head>
         <title>NYSDOT Validation Report - {bridge_config.name}</title>
         <style>
-            body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; margin: 40px; line-height: 1.6; }}
-            .header {{ background: linear-gradient(135deg, #2c3e50 0%, #3498db 100%); color: white; padding: 30px; border-radius: 10px; margin-bottom: 30px; }}
-            .header h1 {{ margin: 0; }}
-            h2 {{ color: #34495e; margin-top: 30px; border-bottom: 2px solid #3498db; padding-bottom: 10px; }}
+            {get_report_css()}
+            /* Additional styles for this report */
             .info-box {{ background: #e3f2fd; border-radius: 8px; padding: 20px; margin: 20px 0; }}
-            .stats-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px; margin: 20px 0; }}
-            .stat-card {{ background: #f8f9fa; border-radius: 8px; padding: 20px; text-align: center; border-left: 4px solid #3498db; }}
-            .stat-card .value {{ font-size: 2em; font-weight: bold; color: #2c3e50; }}
-            .stat-card .label {{ color: #7f8c8d; }}
-            table {{ width: 100%; border-collapse: collapse; margin: 20px 0; }}
-            th {{ background: #34495e; color: white; padding: 12px; text-align: left; }}
-            td {{ padding: 12px; border-bottom: 1px solid #ddd; }}
             tr:hover {{ background: #f5f5f5; }}
             .nysdot-input {{ width: 100px; padding: 8px; border: 1px solid #ddd; border-radius: 4px; }}
             .diff-cell, .error-cell {{ font-weight: bold; }}
@@ -1328,7 +1321,6 @@ def generate_nysdot_comparison_report(
             button {{ background: #3498db; color: white; padding: 10px 20px; border: none; border-radius: 5px; cursor: pointer; font-size: 1em; }}
             button:hover {{ background: #2980b9; }}
             .results {{ display: none; margin-top: 20px; padding: 20px; background: #d4edda; border-radius: 8px; }}
-            .footer {{ margin-top: 40px; padding-top: 20px; border-top: 1px solid #ddd; color: #7f8c8d; }}
         </style>
     </head>
     <body>
@@ -1554,10 +1546,11 @@ def main():
         motorcycle_weight = st.number_input("Motorcycle", 200, 2000, 500, 50)
         
         # Update global weights
-        VEHICLE_WEIGHTS['car'] = car_weight
-        VEHICLE_WEIGHTS['truck'] = truck_weight
-        VEHICLE_WEIGHTS['bus'] = bus_weight
-        VEHICLE_WEIGHTS['motorcycle'] = motorcycle_weight
+        # Update session state weights
+        st.session_state.vehicle_weights['car'] = car_weight
+        st.session_state.vehicle_weights['truck'] = truck_weight
+        st.session_state.vehicle_weights['bus'] = bus_weight
+        st.session_state.vehicle_weights['motorcycle'] = motorcycle_weight
         
         st.markdown("---")
         st.warning(
@@ -1582,6 +1575,8 @@ def main():
         st.session_state.rf_metrics = {}
         st.session_state.vehicle_data = {}
         st.session_state.weather = {}
+        # Initialize weights in session state
+        st.session_state.vehicle_weights = VEHICLE_WEIGHTS.copy()
     
     # Monitoring session state
     if "monitoring_active" not in st.session_state:
@@ -1616,7 +1611,8 @@ def main():
                 camera_config,
                 lane_divider,
                 confidence,
-                bridge_config
+                bridge_config,
+                st.session_state.vehicle_weights
             )
             st.session_state.vehicle_data = vehicle_data
             
@@ -1723,7 +1719,8 @@ def main():
                 if frame is not None:
                     vehicle_data, annotated_frame = detect_vehicles(
                         frame, st.session_state.yolo_model, camera_config,
-                        lane_divider, confidence, bridge_config
+                        lane_divider, confidence, bridge_config,
+                        st.session_state.vehicle_weights
                     )
                     # Run LWR simulation with this density
                     sim = run_lwr_simulation(
@@ -1751,19 +1748,6 @@ def main():
                         "image_b64": img_b64,
                         "damage": round(damage, 6),
                         "reliability_index": round(beta, 2)
-                    })
-
-                    # Convert frame to base64 for HTML report
-                    frame_rgb = cv2.cvtColor(annotated_frame, cv2.COLOR_BGR2RGB)
-                    pil_img = Image.fromarray(frame_rgb)
-                    buffer = io.BytesIO()
-                    pil_img.save(buffer, format="JPEG", quality=80)
-                    img_b64 = base64.b64encode(buffer.getvalue()).decode()
-                    
-                    st.session_state.session_log.append({
-                        "timestamp": datetime.now(),
-                        "vehicle_data": vehicle_data,
-                        "image_b64": img_b64
                     })
                     
                     # Cap log size to prevent memory issues (keep last 500 entries)
