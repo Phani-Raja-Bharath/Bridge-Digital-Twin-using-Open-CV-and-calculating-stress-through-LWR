@@ -75,7 +75,7 @@ Optional features:
 - plotly (for interactive charts)
 - scikit-learn (for Random Forest components used inside the apps)
 
-If you plan to run `Peace_Bridge.py` (YouTube camera source), install:
+If you plan to run `Peace_Bridge.py` (YouTube camera source: PeaceBridgeAuthority), install:
 - yt-dlp
 
 ## Installation
@@ -92,7 +92,7 @@ python -m venv .venv
 pip install --upgrade pip
 pip install streamlit opencv-python numpy pandas scipy requests pillow ultralytics
 pip install plotly scikit-learn  # optional
-pip install yt-dlp               # required for Peace_Bridge.py (YouTube)
+pip install yt-dlp               # required for Peace_Bridge.py (Credits YouTube: PeaceBridgeAuthority)
 ```
 
 Verify `ffmpeg`:
